@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <link rel="icon" type="image/x-icon" href="/static/logo.ico">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ekranoplan Simulation</title>
+    <style>
+        body { margin: 0; overflow: hidden; }
+        canvas { display: block; }
+    </style>
+</head>
+
+
+<body>
+    <script type="module">
+        import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.158.0/build/three.module.js';
+        import { OrbitControls } from 'https://cdn.jsdelivr.net/npm/three@0.158.0/examples/jsm/controls/OrbitControls.js';
+        import { OBJLoader } from 'https://cdn.jsdelivr.net/npm/three@0.158.0/examples/jsm/loaders/OBJLoader.js';
+        import { Water } from 'https://cdn.jsdelivr.net/npm/three@0.158.0/examples/jsm/objects/Water.js';
+        import { GLTFLoader } from 'https://cdn.jsdelivr.net/npm/three@0.158.0/examples/jsm/loaders/GLTFLoader.js';
+
+        // Scene setup
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        const renderer = new THREE.WebGLRenderer();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.body.appendChild(renderer.domElement);
+
+        // Environment (sky and sea)
+        const skyColor = 0x87ceeb; // Light blue sky
+        scene.background = new THREE.Color(skyColor);
+
+        // Water surface
+        const waterGeometry = new THREE.PlaneGeometry(1000, 1000);
+        const water = new Water(waterGeometry, {
+            color: 0x001e0f,
+            scale: 4,
+            flowDirection: new THREE.Vector2(1, 1),
+            textureWidth: 1024,
+            textureHeight: 1024
+        });
+        water.rotation.x = -Math.PI / 2;
+        scene.add(water);
+
+        // Lighting
+        const ambientLight = new THREE.AmbientLight(0xffffff, 1.0); 
+        const directionalLight = new THREE.DirectionalLight(0xffffff, 1.2); 
+
+        //const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+        scene.add(ambientLight);
+
+        //const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+        directionalLight.position.set(10, 20, 10);
+        scene.add(directionalLight);
+
+        // Load Ekranoplan model
+        let ekranoplan;
+        const objLoader = new OBJLoader();
+        objLoader.load('/static/km.obj', 
+        (object) => console.log('Model loaded'), 
+        (xhr) => console.log(`Progress: ${(xhr.loaded / xhr.total * 100)}%`), 
+        (error) => console.error('Error loading model:', error)
+        );
+
+        objLoader.load('/static/km.obj', (object) => {
+            ekranoplan = object;
+            ekranoplan.scale.set(0.1, 0.1, 0.1);
+            scene.add(ekranoplan);
+        });
+
+        // Load seagull model
+        const seagullLoader = new GLTFLoader();
+        const seagulls = [];
+        seagullLoader.load('https://cdn.jsdelivr.net/gh/KhronosGroup/glTF-Sample-Models/2.0/Seagull/glTF/Seagull.gltf', (gltf) => {
+            for (let i = 0; i < 5; i++) {
+                const seagull = gltf.scene.clone();
+                seagull.position.set(
+                    Math.random() * 100 - 50,
+                    Math.random() * 20 + 10,
+                    Math.random() * 100 - 50
+                );
+                seagull.scale.set(0.5, 0.5, 0.5);
+                scene.add(seagull);
+                seagulls.push(seagull);
+            }
+        });
+
+        // Camera controls
+        const controls = new OrbitControls(camera, renderer.domElement);
+        //camera.position.set(0, 10, 20);
+        camera.position.set(0, 10, 50);
+        controls.target.set(0, 10, 0); // Центрируем камеру на объекте
+        controls.update();
+
+      
+
+        // Animation loop
+        async function fetchState() {
+            const response = await fetch('/get_state');
+            return response.json();
+        }
+
+
+        function animate() {
+            requestAnimationFrame(animate);
+
+            // Update ekranoplan state
+            if (ekranoplan) {
+                fetchState().then((state) => {
+                    console.log('State fetched:', state);
+                    ekranoplan.position.set(...state.position);
+                    ekranoplan.quaternion.set(...state.rotation); //  Порядок важен!
+                });
+            }
+
+            // Animate seagulls
+            seagulls.forEach((seagull, index) => {
+                seagull.position.x += Math.sin(Date.now() * 0.001 + index) * 0.1;
+                seagull.position.z += Math.cos(Date.now() * 0.001 + index) * 0.1;
+            });
+
+            // Update water
+            water.material.uniforms['time'].value += 1.0 / 60.0;
+            console.log('Water time:', water.material.uniforms['time'].value);
+
+
+            controls.update();
+            renderer.render(scene, camera);
+        }
+
+        animate();
+
+        // Handle window resize
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+    </script>
+
+<div>
+    <label>Начальная скорость (u0):</label>
+    <input type="number" id="u0" value="10">
+    <label>Начальная высота (z0):</label>
+    <input type="number" id="z0" value="10">
+    <label>Тяга (Fthrust):</label>
+    <input type="number" id="Fthrust" value="100">
+    <label>Управление (d):</label>
+    <input type="number" id="d" value="0">
+    <button id="startButton">Начать симуляцию</button>
+    <button id="stopButton">Остановить симуляцию</button>
+</div>
+<script>
+    document.getElementById('startButton').addEventListener('click', async () => {
+        const u0 = parseFloat(document.getElementById('u0').value);
+        const z0 = parseFloat(document.getElementById('z0').value);
+        const Fthrust = parseFloat(document.getElementById('Fthrust').value);
+        const d = parseFloat(document.getElementById('d').value);
+
+        await fetch('/start_simulation', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                initial_state: [u0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, z0],
+                Fthrust: Fthrust,
+                d: d,
+                H: 10
+            })
+        });
+    });
+
+    document.getElementById('stopButton').addEventListener('click', async () => {
+        await fetch('/stop_simulation', { method: 'POST' });
+    });
+</script>
+
+</body>
+</html>
+
